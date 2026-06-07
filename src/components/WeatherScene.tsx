@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { WeatherCanvas } from './WeatherCanvas'
 import type { MoonPhase, WeatherState } from '../weather'
 
@@ -19,6 +19,16 @@ type DisplaySettings = {
   timeFormat: TimeFormat
   hideAmPm: boolean
   temperatureUnit: TemperatureUnit
+}
+
+const settingsStorageKey = 'weather-scene-display-settings'
+
+const defaultDisplaySettings: DisplaySettings = {
+  showSeconds: false,
+  showMoreWeatherInfo: false,
+  timeFormat: '12h',
+  hideAmPm: false,
+  temperatureUnit: 'fahrenheit',
 }
 
 type WeatherSceneProps = {
@@ -51,16 +61,16 @@ export function WeatherScene({
   children,
 }: WeatherSceneProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settings, setSettings] = useState<DisplaySettings>({
-    showSeconds: false,
-    showMoreWeatherInfo: false,
-    timeFormat: '12h',
-    hideAmPm: false,
-    temperatureUnit: 'fahrenheit',
-  })
+  const [settings, setSettings] = useState<DisplaySettings>(() => loadDisplaySettings())
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null)
+  const settingsPanelRef = useRef<HTMLFormElement | null>(null)
 
   const updateSettings = (nextSettings: Partial<DisplaySettings>) => {
-    setSettings((current) => ({ ...current, ...nextSettings }))
+    setSettings((current) => {
+      const updatedSettings = { ...current, ...nextSettings }
+      saveDisplaySettings(updatedSettings)
+      return updatedSettings
+    })
   }
 
   const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -97,6 +107,30 @@ export function WeatherScene({
     .filter(Boolean)
     .join(' ')
 
+  useEffect(() => {
+    if (!settingsOpen) return
+
+    const closeSettingsOnOutsideClick = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+
+      if (
+        settingsButtonRef.current?.contains(target) ||
+        settingsPanelRef.current?.contains(target)
+      ) {
+        return
+      }
+
+      setSettingsOpen(false)
+    }
+
+    document.addEventListener('pointerdown', closeSettingsOnOutsideClick)
+
+    return () => {
+      document.removeEventListener('pointerdown', closeSettingsOnOutsideClick)
+    }
+  }, [settingsOpen])
+
   return (
     <main className="weather-app">
       <WeatherCanvas
@@ -113,6 +147,7 @@ export function WeatherScene({
       </nav>
 
       <button
+        ref={settingsButtonRef}
         className="settings-button"
         type="button"
         aria-label="Open display settings"
@@ -125,7 +160,7 @@ export function WeatherScene({
       </button>
 
       {settingsOpen ? (
-        <form className="settings-panel" aria-label="Display settings">
+        <form ref={settingsPanelRef} className="settings-panel" aria-label="Display settings">
           <label>
             <input
               type="checkbox"
@@ -252,4 +287,50 @@ function formatMetric(metric: WeatherMetric, unit: TemperatureUnit) {
   }
 
   return metric.value ?? ''
+}
+
+function loadDisplaySettings(): DisplaySettings {
+  if (typeof window === 'undefined') return defaultDisplaySettings
+
+  try {
+    const storedSettings = window.localStorage.getItem(settingsStorageKey)
+    if (!storedSettings) return defaultDisplaySettings
+
+    const parsedSettings = JSON.parse(storedSettings) as Partial<DisplaySettings>
+
+    return {
+      showSeconds:
+        typeof parsedSettings.showSeconds === 'boolean'
+          ? parsedSettings.showSeconds
+          : defaultDisplaySettings.showSeconds,
+      showMoreWeatherInfo:
+        typeof parsedSettings.showMoreWeatherInfo === 'boolean'
+          ? parsedSettings.showMoreWeatherInfo
+          : defaultDisplaySettings.showMoreWeatherInfo,
+      timeFormat:
+        parsedSettings.timeFormat === '12h' || parsedSettings.timeFormat === '24h'
+          ? parsedSettings.timeFormat
+          : defaultDisplaySettings.timeFormat,
+      hideAmPm:
+        typeof parsedSettings.hideAmPm === 'boolean'
+          ? parsedSettings.hideAmPm
+          : defaultDisplaySettings.hideAmPm,
+      temperatureUnit:
+        parsedSettings.temperatureUnit === 'fahrenheit' || parsedSettings.temperatureUnit === 'celsius'
+          ? parsedSettings.temperatureUnit
+          : defaultDisplaySettings.temperatureUnit,
+    }
+  } catch {
+    return defaultDisplaySettings
+  }
+}
+
+function saveDisplaySettings(settings: DisplaySettings) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings))
+  } catch {
+    // Keep controls functional even when storage is unavailable.
+  }
 }
