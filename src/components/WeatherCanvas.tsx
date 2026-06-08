@@ -222,6 +222,81 @@ function drawHill(
   ctx.fill()
 }
 
+function cubicPoint(start: number, controlA: number, controlB: number, end: number, t: number) {
+  const inverse = 1 - t
+
+  return (
+    inverse * inverse * inverse * start +
+    3 * inverse * inverse * t * controlA +
+    3 * inverse * t * t * controlB +
+    t * t * t * end
+  )
+}
+
+function hillSurfaceY(width: number, y: number, lift: number, x: number) {
+  const splitX = width * 0.52
+  const points =
+    x <= splitX
+      ? {
+          startX: 0,
+          controlAX: width * 0.2,
+          controlBX: width * 0.34,
+          endX: splitX,
+          startY: y,
+          controlAY: y - lift,
+          controlBY: y + lift,
+          endY: y,
+        }
+      : {
+          startX: splitX,
+          controlAX: width * 0.7,
+          controlBX: width * 0.88,
+          endX: width,
+          startY: y,
+          controlAY: y - lift * 1.2,
+          controlBY: y + lift * 0.8,
+          endY: y - lift * 0.4,
+        }
+
+  let low = 0
+  let high = 1
+
+  for (let i = 0; i < 12; i += 1) {
+    const mid = (low + high) / 2
+    const curveX = cubicPoint(points.startX, points.controlAX, points.controlBX, points.endX, mid)
+
+    if (curveX < x) {
+      low = mid
+    } else {
+      high = mid
+    }
+  }
+
+  const t = (low + high) / 2
+
+  return cubicPoint(points.startY, points.controlAY, points.controlBY, points.endY, t)
+}
+
+function frontHillSurfaceY(width: number, height: number, x: number) {
+  return hillSurfaceY(width, height * 0.82, height * 0.08, x)
+}
+
+function backHillSurfaceY(width: number, height: number, x: number) {
+  return hillSurfaceY(width, height * 0.72, height * 0.11, x)
+}
+
+function createRiverPath(width: number, height: number) {
+  const top = height * 0.73
+  const riverPath = new Path2D()
+
+  riverPath.moveTo(width * 0.2, height)
+  riverPath.bezierCurveTo(width * 0.36, height * 0.88, width * 0.42, height * 0.76, width * 0.5, top)
+  riverPath.bezierCurveTo(width * 0.58, height * 0.76, width * 0.7, height * 0.88, width * 0.88, height)
+  riverPath.closePath()
+
+  return riverPath
+}
+
 function drawRiver(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -230,11 +305,7 @@ function drawRiver(
   time: number,
 ) {
   const top = height * 0.69
-  const riverPath = new Path2D()
-  riverPath.moveTo(width * 0.2, height)
-  riverPath.bezierCurveTo(width * 0.36, height * 0.88, width * 0.42, height * 0.76, width * 0.5, top)
-  riverPath.bezierCurveTo(width * 0.58, height * 0.76, width * 0.7, height * 0.88, width * 0.88, height)
-  riverPath.closePath()
+  const riverPath = createRiverPath(width, height)
 
   ctx.fillStyle = colors.river
   ctx.fill(riverPath)
@@ -293,13 +364,34 @@ function drawHouse(
   ctx.fillRect(x + size * 0.53, y + size * 0.48, size * 0.22, size * 0.52)
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
 function drawBushes(ctx: CanvasRenderingContext2D, width: number, height: number, colors: SceneColors) {
   ctx.fillStyle = colors.bush
 
-  for (let i = 0; i < 20; i += 1) {
-    const x = (i * 71) % width
-    const y = height * (0.82 + (i % 4) * 0.035)
-    const radius = Math.max(14, width * (0.018 + (i % 3) * 0.004))
+  const sceneScale = Math.min(width, height)
+  const baseRadius = clamp(sceneScale * 0.035, 14, 30)
+  const spacing = baseRadius * 2.25
+  const count = Math.ceil((width + spacing * 2) / spacing)
+  const riverPath = createRiverPath(width, height)
+
+  for (let i = 0; i < count; i += 1) {
+    const radius = baseRadius * (0.92 + (i % 3) * 0.12)
+    const x = -spacing + i * spacing + (seededUnit(i, 11) - 0.5) * baseRadius
+    const groundY = frontHillSurfaceY(width, height, clamp(x, 0, width))
+    const foregroundY = height * (0.84 + (i % 4) * 0.04)
+    const y = Math.max(foregroundY, groundY + radius * (0.24 + (i % 4) * 0.26))
+
+    if (
+      isVisibleRiverAt(ctx, riverPath, width, height, x, y - radius * 0.45) ||
+      isVisibleRiverAt(ctx, riverPath, width, height, x - radius, y - radius * 0.12) ||
+      isVisibleRiverAt(ctx, riverPath, width, height, x + radius, y - radius * 0.12)
+    ) {
+      continue
+    }
+
     ctx.beginPath()
     ctx.arc(x, y, radius, Math.PI, 0)
     ctx.arc(x + radius * 0.78, y + radius * 0.08, radius * 0.78, Math.PI, 0)
@@ -307,6 +399,49 @@ function drawBushes(ctx: CanvasRenderingContext2D, width: number, height: number
     ctx.lineTo(x + radius * 1.5, y + radius * 0.7)
     ctx.lineTo(x - radius * 1.5, y + radius * 0.7)
     ctx.closePath()
+    ctx.fill()
+  }
+}
+
+function isVisibleRiverAt(
+  ctx: CanvasRenderingContext2D,
+  riverPath: Path2D,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+) {
+  if (!ctx.isPointInPath(riverPath, x, y)) return false
+
+  return y < frontHillSurfaceY(width, height, clamp(x, 0, width))
+}
+
+function drawFieldTrees(ctx: CanvasRenderingContext2D, width: number, height: number, color: string) {
+  ctx.fillStyle = color
+
+  const sceneScale = Math.min(width, height)
+  const spacing = clamp(sceneScale * 0.11, 70, 106)
+  const count = Math.ceil((width + spacing * 2) / spacing)
+  const treeWidth = clamp(sceneScale * 0.018, 10, 24)
+  const treeHeight = clamp(sceneScale * 0.072, 34, 70)
+  const riverPath = createRiverPath(width, height)
+
+  for (let i = 0; i < count; i += 1) {
+    const x = -spacing + i * spacing + (seededUnit(i, 23) - 0.5) * spacing * 0.36
+    const groundY = frontHillSurfaceY(width, height, clamp(x, 0, width))
+    const foregroundY = height * (0.8 + (i % 5) * 0.03)
+    const y = Math.max(foregroundY, groundY + treeHeight * (0.12 + (i % 5) * 0.08))
+
+    if (
+      isVisibleRiverAt(ctx, riverPath, width, height, x, y - treeHeight * 0.65) ||
+      isVisibleRiverAt(ctx, riverPath, width, height, x - treeWidth, y) ||
+      isVisibleRiverAt(ctx, riverPath, width, height, x + treeWidth, y)
+    ) {
+      continue
+    }
+
+    ctx.beginPath()
+    ctx.ellipse(x, y, treeWidth, treeHeight, -0.2, 0, Math.PI * 2)
     ctx.fill()
   }
 }
@@ -514,22 +649,26 @@ function drawScene(
 
   drawHill(ctx, width, height, height * 0.72, colors.hillBack, height * 0.11)
   drawRiver(ctx, width, height, colors, time)
-  drawHouse(ctx, width * 0.12, height * 0.63, Math.max(28, width * 0.038), colors, timeOfDay === 'night')
-  drawHouse(ctx, width * 0.77, height * 0.66, Math.max(24, width * 0.032), colors, timeOfDay === 'night')
-  drawHill(ctx, width, height, height * 0.82, colors.hillFront, height * 0.08)
-  drawBushes(ctx, width, height, colors)
+  const leftHouseSize = Math.max(28, width * 0.038)
+  const leftHouseX = width * 0.12
+  const leftHouseGroundX = leftHouseX + leftHouseSize * 0.62
+  const leftHouseY = backHillSurfaceY(width, height, leftHouseGroundX) - leftHouseSize*0.5
+  const rightHouseSize = Math.max(24, width * 0.032)
+  const rightHouseX = width * 0.77
+  const rightHouseGroundX = rightHouseX + rightHouseSize * 0.62
+  const rightHouseY = backHillSurfaceY(width, height, rightHouseGroundX) - rightHouseSize*0.5
 
-  ctx.fillStyle =
+  drawHouse(ctx, leftHouseX, leftHouseY, leftHouseSize, colors, timeOfDay === 'night')
+  drawHouse(ctx, rightHouseX, rightHouseY, rightHouseSize, colors, timeOfDay === 'night')
+  drawHill(ctx, width, height, height * 0.82, colors.hillFront, height * 0.08)
+
+  const treeColor =
     timeOfDay === 'night'
       ? '#203d5b'
       : `rgb(${Math.round(82 + tempTone * 55)}, ${Math.round(170 + tempTone * 42)}, ${Math.round(102 - tempTone * 30)})`
-  for (let i = 0; i < 18; i += 1) {
-    const x = (i * 89) % width
-    const y = height * (0.78 + (i % 5) * 0.025)
-    ctx.beginPath()
-    ctx.ellipse(x, y, width * 0.018, height * 0.065, -0.2, 0, Math.PI * 2)
-    ctx.fill()
-  }
+
+  drawBushes(ctx, width, height, colors)
+  drawFieldTrees(ctx, width, height, treeColor)
 }
 
 export function WeatherCanvas({
@@ -581,10 +720,22 @@ export function WeatherCanvas({
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      width = Math.max(1, Math.floor(rect.width))
-      height = Math.max(1, Math.floor(rect.height))
-      canvas.width = Math.floor(width * dpr)
-      canvas.height = Math.floor(height * dpr)
+      const nextWidth = Math.max(1, Math.floor(rect.width))
+      const nextHeight = Math.max(1, Math.floor(rect.height))
+      const nextCanvasWidth = Math.floor(nextWidth * dpr)
+      const nextCanvasHeight = Math.floor(nextHeight * dpr)
+
+      width = nextWidth
+      height = nextHeight
+
+      if (canvas.width !== nextCanvasWidth) {
+        canvas.width = nextCanvasWidth
+      }
+
+      if (canvas.height !== nextCanvasHeight) {
+        canvas.height = nextCanvasHeight
+      }
+
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
     }
 
@@ -604,12 +755,19 @@ export function WeatherCanvas({
     }
 
     resize()
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(canvas)
+    const visualViewport = window.visualViewport
+
     window.addEventListener('resize', resize)
+    visualViewport?.addEventListener('resize', resize)
     frame = requestAnimationFrame(render)
 
     return () => {
       cancelAnimationFrame(frame)
+      resizeObserver.disconnect()
       window.removeEventListener('resize', resize)
+      visualViewport?.removeEventListener('resize', resize)
     }
   }, [])
 
